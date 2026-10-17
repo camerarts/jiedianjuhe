@@ -644,7 +644,7 @@ function 后台鉴权(request) {
 			'WWW-Authenticate': `Basic realm="${FileName} Admin", charset="UTF-8"`,
 			'Content-Type': 'text/plain; charset=UTF-8',
 			'Cache-Control': 'no-store',
-			'X-Admin-Build': '2026-10-17c',
+			'X-Admin-Build': '2026-10-17d',
 		},
 	});
 }
@@ -758,6 +758,8 @@ async function KV(request, env, txt = 'ADD.txt') {
 						.lat.bad { color: #dc2626; font-weight: 600; }
 						#nodeTable thead th.sortable { cursor: pointer; user-select: none; }
 						#nodeTable thead th.sortable:hover { background: #f3f4f6; color: #111827; }
+						#nodeTable td.c-name { cursor: text; }
+						.name-edit { width: 100%; box-sizing: border-box; font-size: 12px; padding: 2px 5px; border: 1px solid #2563eb; border-radius: 4px; outline: none; }
 						.mini-btn { padding: 4px 10px; font-size: 12px; border: 1px solid #d1d5db; background: #fff; border-radius: 5px; cursor: pointer; color: #374151; }
 						.mini-btn:hover { background: #f3f4f6; }
 						.mini-btn:disabled { opacity: .6; cursor: default; }
@@ -831,7 +833,7 @@ async function KV(request, env, txt = 'ADD.txt') {
 					<br>
 					################################################################<br>
 					${decodeURIComponent(atob('dGVsZWdyYW0lMjAlRTQlQkElQTQlRTYlQjUlODElRTclQkUlQTQlMjAlRTYlOEElODAlRTYlOUMlQUYlRTUlQTQlQTclRTQlQkQlQUMlN0UlRTUlOUMlQTglRTclQkElQkYlRTUlOEYlOTElRTclODklOEMhJTNDYnIlM0UKJTNDYSUyMGhyZWYlM0QlMjdodHRwcyUzQSUyRiUyRnQubWUlMkZDTUxpdXNzc3MlMjclM0VodHRwcyUzQSUyRiUyRnQubWUlMkZDTUxpdXNzc3MlM0MlMkZhJTNFJTNDYnIlM0UKLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tJTNDYnIlM0UKZ2l0aHViJTIwJUU5JUExJUI5JUU3JTlCJUFFJUU1JTlDJUIwJUU1JTlEJTgwJTIwU3RhciFTdGFyIVN0YXIhISElM0NiciUzRQolM0NhJTIwaHJlZiUzRCUyN2h0dHBzJTNBJTJGJTJGZ2l0aHViLmNvbSUyRmNtbGl1JTJGQ0YtV29ya2Vycy1TVUIlMjclM0VodHRwcyUzQSUyRiUyRmdpdGh1Yi5jb20lMkZjbWxpdSUyRkNGLVdvcmtlcnMtU1VCJTNDJTJGYSUzRSUzQ2JyJTNFCi0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLSUzQ2JyJTNFCiUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMw=='))}
-					<br><br>UA: <strong>${request.headers.get('User-Agent')}</strong> · 构建 <strong>2026-10-17c</strong>
+					<br><br>UA: <strong>${request.headers.get('User-Agent')}</strong> · 构建 <strong>2026-10-17d</strong>
 					<script>
 					function copyToClipboard(text, qrcode) {
 						navigator.clipboard.writeText(text).then(() => {
@@ -1042,7 +1044,13 @@ async function KV(request, env, txt = 'ADD.txt') {
 								var c2 = document.createElement('td');
 								c2.className = 'c-name';
 								c2.textContent = row.name;
-								c2.title = lines[ln];
+								c2.setAttribute('data-line', String(ln));
+								if (row.kind === 'sub') {
+									c2.title = lines[ln];
+								} else {
+									c2.title = '双击可修改备注';
+									c2.ondblclick = function () { startEditName(this); };
+								}
 								tr.appendChild(c2);
 
 								var c3 = document.createElement('td');
@@ -1106,6 +1114,58 @@ async function KV(request, env, txt = 'ADD.txt') {
 							var th = document.getElementById('thLat');
 							if (!th) return;
 							th.textContent = '延迟' + (sortKey === 'lat' ? (sortDir === 1 ? ' ▲' : ' ▼') : '');
+						}
+						// 双击备注名 → 就地编辑
+						function startEditName(td) {
+							if (td.querySelector('input')) return;
+							var ln = parseInt(td.getAttribute('data-line'), 10);
+							var ta = document.getElementById('content');
+							var lines = ta.value.split(NL);
+							var raw = lines[ln] || '';
+							var hash = raw.indexOf('#');
+							var oldName = hash > -1 ? raw.slice(hash + 1) : '';
+							try { oldName = decodeURIComponent(oldName); } catch (e) { }
+
+							var input = document.createElement('input');
+							input.type = 'text';
+							input.className = 'name-edit';
+							input.value = oldName;
+							td.textContent = '';
+							td.appendChild(input);
+							input.focus();
+							input.select();
+
+							var done = false;
+							function commit(save) {
+								if (done) return;
+								done = true;
+								if (!save) { renderTable(); return; }
+								applyRename(ln, input.value.trim());
+							}
+							input.addEventListener('keydown', function (e) {
+								if (e.key === 'Enter') { e.preventDefault(); commit(true); }
+								else if (e.key === 'Escape') { e.preventDefault(); commit(false); }
+							});
+							input.addEventListener('blur', function () { commit(true); });
+						}
+
+						// 把新备注写回文本框对应行，立即保存
+						function applyRename(ln, newName) {
+							var ta = document.getElementById('content');
+							var lines = ta.value.split(NL);
+							var old = lines[ln];
+							if (old === undefined) { renderTable(); return; }
+							var hash = old.indexOf('#');
+							var base = hash > -1 ? old.slice(0, hash) : old;
+							var newLine = newName ? (base + '#' + encodeURIComponent(newName)) : base;
+							if (newLine === old) { renderTable(); return; }
+							lines[ln] = newLine;
+							var kOld = old.trim();
+							var kNew = newLine.trim();
+							if (latCache[kOld]) { latCache[kNew] = latCache[kOld]; delete latCache[kOld]; }
+							ta.value = lines.join(NL);
+							renderTable();
+							saveRaw(ta.value);
 						}
 
 						function saveRaw(content) {
@@ -1190,7 +1250,7 @@ async function KV(request, env, txt = 'ADD.txt') {
 				"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
 				"Pragma": "no-cache",
 				"Expires": "0",
-				"X-Admin-Build": "2026-10-17c"
+				"X-Admin-Build": "2026-10-17d"
 			}
 		});
 	} catch (error) {
