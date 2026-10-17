@@ -5,7 +5,7 @@ let mytoken = 'samsung1'; //可以随便取，或者uuid生成，https://1024too
 let BotToken = ''; //可以为空，或者@BotFather中输入/start，/newbot，并关注机器人
 let ChatID = ''; //可以为空，或者@userinfobot中获取，/start
 let TG = 0; //小白勿动， 开发者专用，1 为推送所有的访问信息，0 为不推送订阅转换后端的访问信息与异常访问
-let FileName = 'CF-Workers-SUB-测试';
+let FileName = 'CF-Workers-SUB';
 let SUBUpdateTime = 6; //自定义订阅更新时间，单位小时
 let total = 99;//TB
 let timestamp = 4102329600000;//2099-12-31
@@ -644,7 +644,7 @@ function 后台鉴权(request) {
 			'WWW-Authenticate': `Basic realm="${FileName} Admin", charset="UTF-8"`,
 			'Content-Type': 'text/plain; charset=UTF-8',
 			'Cache-Control': 'no-store',
-			'X-Admin-Build': '2026-10-17b',
+			'X-Admin-Build': '2026-10-17c',
 		},
 	});
 }
@@ -756,6 +756,8 @@ async function KV(request, env, txt = 'ADD.txt') {
 						.lat.good { color: #059669; font-weight: 600; }
 						.lat.mid { color: #d97706; font-weight: 600; }
 						.lat.bad { color: #dc2626; font-weight: 600; }
+						#nodeTable thead th.sortable { cursor: pointer; user-select: none; }
+						#nodeTable thead th.sortable:hover { background: #f3f4f6; color: #111827; }
 						.mini-btn { padding: 4px 10px; font-size: 12px; border: 1px solid #d1d5db; background: #fff; border-radius: 5px; cursor: pointer; color: #374151; }
 						.mini-btn:hover { background: #f3f4f6; }
 						.mini-btn:disabled { opacity: .6; cursor: default; }
@@ -818,7 +820,7 @@ async function KV(request, env, txt = 'ADD.txt') {
 							<div class="table-wrap">
 								<table id="nodeTable">
 									<thead>
-										<tr><th>#</th><th>备注</th><th>协议</th><th>地址</th><th>端口</th><th>延迟</th><th>操作</th></tr>
+										<tr><th>#</th><th>备注</th><th>协议</th><th>地址</th><th>端口</th><th id="thLat" class="sortable" onclick="sortByLatency()" title="点击按延迟排序，再点反向，第三次恢复原序">延迟</th><th>操作</th></tr>
 									</thead>
 									<tbody id="nodeBody"></tbody>
 								</table>
@@ -829,7 +831,7 @@ async function KV(request, env, txt = 'ADD.txt') {
 					<br>
 					################################################################<br>
 					${decodeURIComponent(atob('dGVsZWdyYW0lMjAlRTQlQkElQTQlRTYlQjUlODElRTclQkUlQTQlMjAlRTYlOEElODAlRTYlOUMlQUYlRTUlQTQlQTclRTQlQkQlQUMlN0UlRTUlOUMlQTglRTclQkElQkYlRTUlOEYlOTElRTclODklOEMhJTNDYnIlM0UKJTNDYSUyMGhyZWYlM0QlMjdodHRwcyUzQSUyRiUyRnQubWUlMkZDTUxpdXNzc3MlMjclM0VodHRwcyUzQSUyRiUyRnQubWUlMkZDTUxpdXNzc3MlM0MlMkZhJTNFJTNDYnIlM0UKLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tJTNDYnIlM0UKZ2l0aHViJTIwJUU5JUExJUI5JUU3JTlCJUFFJUU1JTlDJUIwJUU1JTlEJTgwJTIwU3RhciFTdGFyIVN0YXIhISElM0NiciUzRQolM0NhJTIwaHJlZiUzRCUyN2h0dHBzJTNBJTJGJTJGZ2l0aHViLmNvbSUyRmNtbGl1JTJGQ0YtV29ya2Vycy1TVUIlMjclM0VodHRwcyUzQSUyRiUyRmdpdGh1Yi5jb20lMkZjbWxpdSUyRkNGLVdvcmtlcnMtU1VCJTNDJTJGYSUzRSUzQ2JyJTNFCi0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLSUzQ2JyJTNFCiUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMw=='))}
-					<br><br>UA: <strong>${request.headers.get('User-Agent')}</strong> · 构建 <strong>2026-10-17b</strong>
+					<br><br>UA: <strong>${request.headers.get('User-Agent')}</strong> · 构建 <strong>2026-10-17c</strong>
 					<script>
 					function copyToClipboard(text, qrcode) {
 						navigator.clipboard.writeText(text).then(() => {
@@ -966,6 +968,9 @@ async function KV(request, env, txt = 'ADD.txt') {
 
 						// ===== 节点列表 / 测速 / 删除 =====
 						var NL = String.fromCharCode(10);
+						var latCache = {};   // 以节点链接原文为 key 缓存延迟，删除/排序/重渲染都不会丢
+						var sortKey = '';    // '' = 原始顺序；'lat' = 按延迟排
+						var sortDir = 1;     // 1 = 升序，-1 = 降序
 
 						function parseLine(line) {
 							var s = (line || '').trim();
@@ -992,57 +997,92 @@ async function KV(request, env, txt = 'ADD.txt') {
 							return { kind: 'node', proto: proto, name: name || (host + ':' + port), host: host, port: port };
 						}
 
+						function latClass(ms) {
+							return 'lat ' + (ms < 200 ? 'good' : (ms < 600 ? 'mid' : 'bad'));
+						}
+
+						function latOf(line) {
+							var c = latCache[(line || '').trim()];
+							if (c && c.ok) return c.ms;
+							return null;
+						}
+
 						function renderTable() {
 							var tb = document.getElementById('nodeBody');
 							var ta = document.getElementById('content');
 							if (!tb || !ta) return;
 							var lines = ta.value.split(NL);
-							tb.textContent = '';
-							var n = 0;
+							var rows = [];
 							for (var i = 0; i < lines.length; i++) {
 								var p = parseLine(lines[i]);
 								if (!p) continue;
-								n++;
+								rows.push({ line: i, p: p });
+							}
+							if (sortKey === 'lat') {
+								rows.sort(function (a, b) {
+									var va = latOf(lines[a.line]);
+									var vb = latOf(lines[b.line]);
+									if (va === null && vb === null) return a.line - b.line;
+									if (va === null) return 1;
+									if (vb === null) return -1;
+									return (va - vb) * sortDir;
+								});
+							}
+							tb.textContent = '';
+							for (var k = 0; k < rows.length; k++) {
+								var ln = rows[k].line;
+								var row = rows[k].p;
 								var tr = document.createElement('tr');
 
 								var c1 = document.createElement('td');
 								c1.className = 'c-idx';
-								c1.textContent = String(n);
+								c1.textContent = String(k + 1);
 								tr.appendChild(c1);
 
 								var c2 = document.createElement('td');
 								c2.className = 'c-name';
-								c2.textContent = p.name;
-								c2.title = lines[i];
+								c2.textContent = row.name;
+								c2.title = lines[ln];
 								tr.appendChild(c2);
 
 								var c3 = document.createElement('td');
-								c3.textContent = p.proto;
+								c3.textContent = row.proto;
 								tr.appendChild(c3);
 
 								var c4 = document.createElement('td');
 								c4.className = 'c-host';
-								var shown = p.kind === 'sub' ? p.name : p.host;
+								var shown = row.kind === 'sub' ? row.name : row.host;
 								c4.textContent = shown.length > 40 ? shown.slice(0, 40) + '...' : shown;
 								c4.title = shown;
 								tr.appendChild(c4);
 
 								var c5 = document.createElement('td');
 								c5.className = 'c-port';
-								c5.textContent = p.port || '-';
+								c5.textContent = row.port || '-';
 								tr.appendChild(c5);
 
 								var c6 = document.createElement('td');
 								c6.className = 'lat';
-								c6.id = 'lat-' + i;
-								c6.textContent = (p.kind === 'node' && p.host) ? '未测' : '-';
+								c6.id = 'lat-' + ln;
+								var cached = latCache[(lines[ln] || '').trim()];
+								if (cached) {
+									if (cached.ok) {
+										c6.textContent = cached.ms + ' ms';
+										c6.className = latClass(cached.ms);
+									} else {
+										c6.textContent = cached.err || '失败';
+										c6.className = 'lat bad';
+									}
+								} else {
+									c6.textContent = (row.kind === 'node' && row.host) ? '未测' : '-';
+								}
 								tr.appendChild(c6);
 
 								var c7 = document.createElement('td');
 								var btn = document.createElement('button');
 								btn.className = 'mini-btn danger';
 								btn.textContent = '删除';
-								btn.setAttribute('data-line', String(i));
+								btn.setAttribute('data-line', String(ln));
 								btn.onclick = function () { delNode(this); };
 								c7.appendChild(btn);
 								tr.appendChild(c7);
@@ -1050,7 +1090,22 @@ async function KV(request, env, txt = 'ADD.txt') {
 								tb.appendChild(tr);
 							}
 							var cnt = document.getElementById('nodeCount');
-							if (cnt) cnt.textContent = String(n);
+							if (cnt) cnt.textContent = String(rows.length);
+							updateSortIndicator();
+						}
+
+						// 点表头：升序 → 降序 → 恢复原始顺序
+						function sortByLatency() {
+							if (sortKey !== 'lat') { sortKey = 'lat'; sortDir = 1; }
+							else if (sortDir === 1) { sortDir = -1; }
+							else { sortKey = ''; sortDir = 1; }
+							renderTable();
+						}
+
+						function updateSortIndicator() {
+							var th = document.getElementById('thLat');
+							if (!th) return;
+							th.textContent = '延迟' + (sortKey === 'lat' ? (sortDir === 1 ? ' ▲' : ' ▼') : '');
 						}
 
 						function saveRaw(content) {
@@ -1097,18 +1152,14 @@ async function KV(request, env, txt = 'ADD.txt') {
 								if (!r.ok) throw new Error('HTTP ' + r.status);
 								return r.json();
 							}).then(function (list) {
+								var lines = ta.value.split(NL);
 								for (var k = 0; k < list.length; k++) {
 									var it = list[k];
-									var cell = document.getElementById('lat-' + it.line);
-									if (!cell) continue;
-									if (it.ok) {
-										cell.textContent = it.ms + ' ms';
-										cell.className = 'lat ' + (it.ms < 200 ? 'good' : (it.ms < 600 ? 'mid' : 'bad'));
-									} else {
-										cell.textContent = it.err || '失败';
-										cell.className = 'lat bad';
-									}
+									var raw = lines[it.line];
+									if (raw === undefined) continue;
+									latCache[raw.trim()] = { ok: it.ok, ms: it.ms, err: it.err };
 								}
+								renderTable();
 							}).catch(function (e) {
 								alert('测试失败: ' + e.message);
 							}).then(function () {
@@ -1118,6 +1169,7 @@ async function KV(request, env, txt = 'ADD.txt') {
 						}
 
 						window.renderTable = renderTable;
+						window.sortByLatency = sortByLatency;
 						window.pingAll = pingAll;
 						window.delNode = delNode;
 
@@ -1138,7 +1190,7 @@ async function KV(request, env, txt = 'ADD.txt') {
 				"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
 				"Pragma": "no-cache",
 				"Expires": "0",
-				"X-Admin-Build": "2026-10-17b"
+				"X-Admin-Build": "2026-10-17c"
 			}
 		});
 	} catch (error) {
