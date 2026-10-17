@@ -71,6 +71,15 @@ export default {
 			if (未通过鉴权) return 未通过鉴权;
 			if (!env.KV) return new Response('未绑定 KV 空间', { status: 400, headers: { 'Content-Type': 'text/plain; charset=UTF-8' } });
 			await 迁移地址列表(env, 'LINK.txt');
+
+			// 节点测速接口（需通过上面的 Basic 认证）
+			if (url.searchParams.get('api') === 'ping') {
+				if (request.method !== 'POST') return new Response('Method Not Allowed', { status: 405, headers: { 'Content-Type': 'text/plain; charset=UTF-8' } });
+				const 结果 = await 批量测速(await request.text());
+				return new Response(JSON.stringify(结果), {
+					headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
+				});
+			}
 			await sendMessage(`#编辑订阅 ${FileName}`, request.headers.get('CF-Connecting-IP'), `UA: ${userAgentHeader}</tg-spoiler>\n域名: ${url.hostname}\n<tg-spoiler>入口: ${url.pathname + url.search}</tg-spoiler>`);
 			return await KV(request, env, 'LINK.txt');
 		}
@@ -513,6 +522,105 @@ async function 迁移地址列表(env, txt = 'ADD.txt') {
 	return false;
 }
 
+// ===== 后台：节点解析 / 延迟探测 =====
+function 安全Base64解码(s) {
+	try {
+		let b = String(s || '').trim().replace(/-/g, '+').replace(/_/g, '/').replace(/\s+/g, '');
+		while (b.length % 4) b += '=';
+		const bin = atob(b);
+		return new TextDecoder().decode(Uint8Array.from(bin, c => c.charCodeAt(0)));
+	} catch (e) { return ''; }
+}
+
+// 从一行链接里解析出 协议 / 备注 / 主机 / 端口 / 是否 TLS
+function 解析节点行(line) {
+	const s = String(line || '').trim();
+	if (!s) return null;
+	if (/^https?:\/\//i.test(s)) return { kind: 'sub', name: s, host: '', port: 0 };
+	const i = s.indexOf('://');
+	if (i < 0) return { kind: 'other', name: s.slice(0, 60), host: '', port: 0 };
+	const proto = s.slice(0, i).toLowerCase();
+	const hash = s.indexOf('#');
+	let name = '';
+	if (hash > -1) { try { name = decodeURIComponent(s.slice(hash + 1)); } catch (e) { name = s.slice(hash + 1); } }
+
+	if (proto === 'vmess') {
+		const payload = (hash > -1 ? s.slice(i + 3, hash) : s.slice(i + 3)).trim();
+		try {
+			const o = JSON.parse(安全Base64解码(payload));
+			const host = String(o.add || '').trim();
+			const port = parseInt(o.port, 10) || 0;
+			return { kind: 'node', name: o.ps || name || host, host, port, tls: String(o.tls || '').toLowerCase() === 'tls' };
+		} catch (e) {
+			return { kind: 'other', name: name || 'vmess(解析失败)', host: '', port: 0 };
+		}
+	}
+
+	const m = s.match(/^[a-z0-9]+:\/\/(?:[^@\/]*@)?([^\/?#]+)/i);
+	if (!m) return { kind: 'other', name: name || s.slice(0, 60), host: '', port: 0 };
+	const hp = m[1].trim();
+	const c = hp.lastIndexOf(':');
+	const host = (c > -1 ? hp.slice(0, c) : hp).replace(/^\[|\]$/g, '');
+	const port = c > -1 ? (parseInt(hp.slice(c + 1), 10) || 0) : 0;
+	if (!host || !port) return { kind: 'other', name: name || host, host: '', port: 0 };
+
+	// TLS 判定：优先看 security 参数，其次按端口推断
+	const q = hash > -1 ? s.slice(i + 3, hash) : s.slice(i + 3);
+	let tls;
+	if (/[?&](security|tls)=tls/i.test(q)) tls = true;
+	else if (/[?&](security|tls)=none/i.test(q)) tls = false;
+	else tls = [443, 8443, 2053, 2083, 2087, 2096].includes(port);
+
+	return { kind: 'node', name: name || (host + ':' + port), host, port, tls };
+}
+
+// 用一次 HTTP(S) 请求测往返耗时；只关心耗时，不关心状态码
+async function 探测节点(host, port, tls, timeoutMs) {
+	const target = (tls ? 'https' : 'http') + '://' + host + ':' + port + '/';
+	const t0 = Date.now();
+	const ctrl = new AbortController();
+	const timer = setTimeout(() => { try { ctrl.abort(); } catch (e) { } }, timeoutMs || 4000);
+	try {
+		await fetch(target, {
+			method: 'GET',
+			redirect: 'manual',
+			signal: ctrl.signal,
+			headers: { 'User-Agent': 'Mozilla/5.0 (compatible; CF-Workers-SUB-Ping/1.0)' },
+		});
+		return { ok: true, ms: Date.now() - t0 };
+	} catch (e) {
+		const msg = String((e && e.message) || '');
+		const ms = Date.now() - t0;
+		let err = '连接失败';
+		if (e && e.name === 'AbortError') err = '超时';
+		else if (msg.indexOf('1042') > -1 || msg.indexOf('same zone') > -1) err = '同区限制';
+		else if (msg.indexOf('certificate') > -1 || msg.indexOf('TLS') > -1) err = '证书错误';
+		else if (msg.indexOf('getaddrinfo') > -1 || msg.indexOf('DNS') > -1 || msg.indexOf('resolve') > -1) err = '域名解析失败';
+		return { ok: false, ms, err };
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+// 批量探测，返回 [{ line, ok, ms, err }]，line 为该行在原文中的下标
+async function 批量测速(text) {
+	const lines = String(text || '').split('\n');
+	const 任务 = [];
+	for (let i = 0; i < lines.length; i++) {
+		const p = 解析节点行(lines[i]);
+		if (p && p.kind === 'node' && p.host && p.port) 任务.push({ line: i, host: p.host, port: p.port, tls: p.tls });
+	}
+	const 待测 = 任务.slice(0, 40); // 免费版 Worker 单次请求上限 50 个子请求，留点余量
+	const 结果 = [];
+	const 并发 = 8;
+	for (let i = 0; i < 待测.length; i += 并发) {
+		const 批 = 待测.slice(i, i + 并发);
+		const r = await Promise.all(批.map(t => 探测节点(t.host, t.port, t.tls, 4000)));
+		for (let j = 0; j < 批.length; j++) 结果.push({ line: 批[j].line, ok: r[j].ok, ms: r[j].ms, err: r[j].err });
+	}
+	return 结果;
+}
+
 // 后台管理页面鉴权：通过返回 null，未通过返回 401 响应（触发浏览器弹窗）
 function 后台鉴权(request) {
 	if (!AdminPass) {
@@ -629,6 +737,31 @@ async function KV(request, env, txt = 'ADD.txt') {
 						.save-status {
 							color: #666;
 						}
+
+						.node-panel { margin-top: 18px; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden; }
+						.panel-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; background: #f9fafb; border-bottom: 1px solid #e5e7eb; }
+						.panel-head strong { font-size: 14px; color: #111827; }
+						.panel-head .count { color: #6b7280; font-weight: normal; margin-left: 6px; }
+						.table-wrap { max-height: 460px; overflow: auto; }
+						#nodeTable { width: 100%; border-collapse: collapse; font-size: 12px; }
+						#nodeTable th, #nodeTable td { padding: 6px 10px; border-bottom: 1px solid #f1f2f4; text-align: left; white-space: nowrap; }
+						#nodeTable thead th { position: sticky; top: 0; background: #fff; font-weight: 600; color: #374151; border-bottom: 1px solid #e5e7eb; z-index: 1; }
+						#nodeTable tbody tr:hover { background: #f9fafb; }
+						.c-idx { color: #9ca3af; }
+						.c-name { max-width: 260px; overflow: hidden; text-overflow: ellipsis; color: #111827; }
+						.c-host { color: #4b5563; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
+						.c-port { color: #4b5563; }
+						.lat { font-variant-numeric: tabular-nums; color: #9ca3af; }
+						.lat.good { color: #059669; font-weight: 600; }
+						.lat.mid { color: #d97706; font-weight: 600; }
+						.lat.bad { color: #dc2626; font-weight: 600; }
+						.mini-btn { padding: 4px 10px; font-size: 12px; border: 1px solid #d1d5db; background: #fff; border-radius: 5px; cursor: pointer; color: #374151; }
+						.mini-btn:hover { background: #f3f4f6; }
+						.mini-btn:disabled { opacity: .6; cursor: default; }
+						.mini-btn.primary { background: #2563eb; border-color: #2563eb; color: #fff; }
+						.mini-btn.primary:hover { background: #1d4ed8; }
+						.mini-btn.danger { color: #dc2626; border-color: #fecaca; }
+						.mini-btn.danger:hover { background: #fef2f2; }
 					</style>
 					<script src="https://cdn.jsdelivr.net/npm/@keeex/qrcodejs-kx@1.0.2/qrcode.min.js"></script>
 				</head>
@@ -671,6 +804,24 @@ async function KV(request, env, txt = 'ADD.txt') {
 						<div class="save-container">
 							<button class="save-btn" onclick="saveContent(this)">保存</button>
 							<span class="save-status" id="saveStatus"></span>
+						</div>
+
+						<div class="node-panel">
+							<div class="panel-head">
+								<strong>节点列表<span class="count" id="nodeCount">0</span></strong>
+								<div>
+									<button class="mini-btn" onclick="renderTable()">刷新</button>
+									<button class="mini-btn primary" onclick="pingAll(this)">测试全部</button>
+								</div>
+							</div>
+							<div class="table-wrap">
+								<table id="nodeTable">
+									<thead>
+										<tr><th>#</th><th>备注</th><th>协议</th><th>地址</th><th>端口</th><th>延迟</th><th>操作</th></tr>
+									</thead>
+									<tbody id="nodeBody"></tbody>
+								</table>
+							</div>
 						</div>
 						` : '<p>请绑定 <strong>变量名称</strong> 为 <strong>KV</strong> 的KV命名空间</p>'}
 					</div>
@@ -810,6 +961,169 @@ async function KV(request, env, txt = 'ADD.txt') {
 						textarea.addEventListener('input', () => {
 							clearTimeout(timer);
 							timer = setTimeout(saveContent, 5000);
+						});
+
+						// ===== 节点列表 / 测速 / 删除 =====
+						var NL = String.fromCharCode(10);
+
+						function parseLine(line) {
+							var s = (line || '').trim();
+							if (!s) return null;
+							var i = s.indexOf('://');
+							if (i < 0) return { kind: 'other', proto: '?', name: s.slice(0, 60), host: '', port: '' };
+							var proto = s.slice(0, i).toLowerCase();
+							if (proto === 'http' || proto === 'https') return { kind: 'sub', proto: '订阅', name: s, host: '', port: '' };
+							var hash = s.indexOf('#');
+							var name = hash > -1 ? s.slice(hash + 1) : '';
+							try { name = decodeURIComponent(name); } catch (e) { }
+							var body = hash > -1 ? s.slice(0, hash) : s;
+							if (proto === 'vmess') return { kind: 'node', proto: proto, name: name || 'vmess', host: '', port: '' };
+							var after = body.slice(i + 3);
+							var at = after.indexOf('@');
+							var hp = at > -1 ? after.slice(at + 1) : after;
+							var q = hp.indexOf('?');
+							if (q > -1) hp = hp.slice(0, q);
+							var sl = hp.indexOf('/');
+							if (sl > -1) hp = hp.slice(0, sl);
+							var c = hp.lastIndexOf(':');
+							var host = c > -1 ? hp.slice(0, c) : hp;
+							var port = c > -1 ? hp.slice(c + 1) : '';
+							return { kind: 'node', proto: proto, name: name || (host + ':' + port), host: host, port: port };
+						}
+
+						function renderTable() {
+							var tb = document.getElementById('nodeBody');
+							var ta = document.getElementById('content');
+							if (!tb || !ta) return;
+							var lines = ta.value.split(NL);
+							tb.textContent = '';
+							var n = 0;
+							for (var i = 0; i < lines.length; i++) {
+								var p = parseLine(lines[i]);
+								if (!p) continue;
+								n++;
+								var tr = document.createElement('tr');
+
+								var c1 = document.createElement('td');
+								c1.className = 'c-idx';
+								c1.textContent = String(n);
+								tr.appendChild(c1);
+
+								var c2 = document.createElement('td');
+								c2.className = 'c-name';
+								c2.textContent = p.name;
+								c2.title = lines[i];
+								tr.appendChild(c2);
+
+								var c3 = document.createElement('td');
+								c3.textContent = p.proto;
+								tr.appendChild(c3);
+
+								var c4 = document.createElement('td');
+								c4.className = 'c-host';
+								var shown = p.kind === 'sub' ? p.name : p.host;
+								c4.textContent = shown.length > 40 ? shown.slice(0, 40) + '...' : shown;
+								c4.title = shown;
+								tr.appendChild(c4);
+
+								var c5 = document.createElement('td');
+								c5.className = 'c-port';
+								c5.textContent = p.port || '-';
+								tr.appendChild(c5);
+
+								var c6 = document.createElement('td');
+								c6.className = 'lat';
+								c6.id = 'lat-' + i;
+								c6.textContent = (p.kind === 'node' && p.host) ? '未测' : '-';
+								tr.appendChild(c6);
+
+								var c7 = document.createElement('td');
+								var btn = document.createElement('button');
+								btn.className = 'mini-btn danger';
+								btn.textContent = '删除';
+								btn.setAttribute('data-line', String(i));
+								btn.onclick = function () { delNode(this); };
+								c7.appendChild(btn);
+								tr.appendChild(c7);
+
+								tb.appendChild(tr);
+							}
+							var cnt = document.getElementById('nodeCount');
+							if (cnt) cnt.textContent = String(n);
+						}
+
+						function saveRaw(content) {
+							return fetch(location.pathname, {
+								method: 'POST',
+								headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
+								body: content,
+								cache: 'no-store'
+							}).then(function (r) {
+								if (!r.ok) throw new Error('HTTP ' + r.status);
+								var st = document.getElementById('saveStatus');
+								if (st) { st.textContent = '已保存 ' + new Date().toLocaleTimeString(); st.style.color = '#666'; }
+							}).catch(function (e) {
+								var st = document.getElementById('saveStatus');
+								if (st) { st.textContent = '保存失败: ' + e.message; st.style.color = 'red'; }
+							});
+						}
+
+						function delNode(btn) {
+							var idx = parseInt(btn.getAttribute('data-line'), 10);
+							var ta = document.getElementById('content');
+							var lines = ta.value.split(NL);
+							var p = parseLine(lines[idx]);
+							if (!confirm('确定删除这条？' + NL + NL + (p ? p.name : lines[idx]))) return;
+							lines.splice(idx, 1);
+							ta.value = lines.join(NL);
+							renderTable();
+							saveRaw(ta.value);
+						}
+
+						function pingAll(btn) {
+							var ta = document.getElementById('content');
+							var old = btn.textContent;
+							btn.disabled = true;
+							btn.textContent = '测试中...';
+							var cells = document.querySelectorAll('#nodeBody .lat');
+							for (var i = 0; i < cells.length; i++) { cells[i].textContent = '...'; cells[i].className = 'lat'; }
+							fetch(location.pathname + '?api=ping', {
+								method: 'POST',
+								headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
+								body: ta.value,
+								cache: 'no-store'
+							}).then(function (r) {
+								if (!r.ok) throw new Error('HTTP ' + r.status);
+								return r.json();
+							}).then(function (list) {
+								for (var k = 0; k < list.length; k++) {
+									var it = list[k];
+									var cell = document.getElementById('lat-' + it.line);
+									if (!cell) continue;
+									if (it.ok) {
+										cell.textContent = it.ms + ' ms';
+										cell.className = 'lat ' + (it.ms < 200 ? 'good' : (it.ms < 600 ? 'mid' : 'bad'));
+									} else {
+										cell.textContent = it.err || '失败';
+										cell.className = 'lat bad';
+									}
+								}
+							}).catch(function (e) {
+								alert('测试失败: ' + e.message);
+							}).then(function () {
+								btn.disabled = false;
+								btn.textContent = old;
+							});
+						}
+
+						window.renderTable = renderTable;
+						window.pingAll = pingAll;
+						window.delNode = delNode;
+
+						renderTable();
+						document.getElementById('content').addEventListener('input', function () {
+							clearTimeout(window.__rt);
+							window.__rt = setTimeout(renderTable, 400);
 						});
 					}
 					</script>
