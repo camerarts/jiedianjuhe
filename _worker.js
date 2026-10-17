@@ -1,7 +1,7 @@
 
 // 部署完成后在网址后面加上这个，获取自建节点和机场聚合节点，/?token=auto或/auto或
 
-let mytoken = 'auto'; //可以随便取，或者uuid生成，https://1024tools.com/uuid
+let mytoken = 'samsung1'; //可以随便取，或者uuid生成，https://1024tools.com/uuid
 let BotToken = ''; //可以为空，或者@BotFather中输入/start，/newbot，并关注机器人
 let ChatID = ''; //可以为空，或者@userinfobot中获取，/start
 let TG = 0; //小白勿动， 开发者专用，1 为推送所有的访问信息，0 为不推送订阅转换后端的访问信息与异常访问
@@ -9,6 +9,11 @@ let FileName = 'CF-Workers-SUB';
 let SUBUpdateTime = 6; //自定义订阅更新时间，单位小时
 let total = 99;//TB
 let timestamp = 4102329600000;//2099-12-31
+
+// ===== 后台管理密码（HTTP Basic 认证）=====
+let AdminUser = 'admin';  // 后台登录用户名
+let AdminPass = '';       // 后台登录密码，必填；建议在 Cloudflare 变量里设置 ADMINPASS
+let AdminPath = '/admin'; // 后台管理路径，与订阅路径分离；可用变量 ADMINPATH 覆盖
 
 //节点链接 + 订阅链接
 let MainData = `
@@ -56,6 +61,19 @@ export default {
 		total = total * 1099511627776;
 		let expire = Math.floor(timestamp / 1000);
 		SUBUpdateTime = env.SUBUPTIME || SUBUpdateTime;
+		AdminUser = env.ADMINUSER || AdminUser;
+		AdminPass = env.ADMINPASS || AdminPass;
+		AdminPath = env.ADMINPATH || AdminPath;
+
+		// ===== 后台管理入口（独立路径，与订阅路径彻底分离）=====
+		if (url.pathname === AdminPath || url.pathname === AdminPath + '/') {
+			const 未通过鉴权 = 后台鉴权(request);
+			if (未通过鉴权) return 未通过鉴权;
+			if (!env.KV) return new Response('未绑定 KV 空间', { status: 400, headers: { 'Content-Type': 'text/plain; charset=UTF-8' } });
+			await 迁移地址列表(env, 'LINK.txt');
+			await sendMessage(`#编辑订阅 ${FileName}`, request.headers.get('CF-Connecting-IP'), `UA: ${userAgentHeader}</tg-spoiler>\n域名: ${url.hostname}\n<tg-spoiler>入口: ${url.pathname + url.search}</tg-spoiler>`);
+			return await KV(request, env, 'LINK.txt');
+		}
 
 		if (!(token == mytoken || token == fakeToken || url.pathname == ("/" + mytoken) || url.pathname.includes("/" + mytoken + "?"))) {
 			if (TG == 1 && url.pathname !== "/" && url.pathname !== "/favicon.ico") await sendMessage(`#异常访问 ${FileName}`, request.headers.get('CF-Connecting-IP'), `UA: ${userAgent}</tg-spoiler>\n域名: ${url.hostname}\n<tg-spoiler>入口: ${url.pathname + url.search}</tg-spoiler>`);
@@ -70,12 +88,7 @@ export default {
 		} else {
 			if (env.KV) {
 				await 迁移地址列表(env, 'LINK.txt');
-				if (userAgent.includes('mozilla') && !url.search) {
-					await sendMessage(`#编辑订阅 ${FileName}`, request.headers.get('CF-Connecting-IP'), `UA: ${userAgentHeader}</tg-spoiler>\n域名: ${url.hostname}\n<tg-spoiler>入口: ${url.pathname + url.search}</tg-spoiler>`);
-					return await KV(request, env, 'LINK.txt');
-				} else {
-					MainData = await env.KV.get('LINK.txt') || MainData;
-				}
+				MainData = await env.KV.get('LINK.txt') || MainData;
 			} else {
 				MainData = env.LINK || MainData;
 				if (env.LINKSUB) urls = await ADD(env.LINKSUB);
@@ -498,6 +511,33 @@ async function 迁移地址列表(env, txt = 'ADD.txt') {
 		return true;
 	}
 	return false;
+}
+
+// 后台管理页面鉴权：通过返回 null，未通过返回 401 响应（触发浏览器弹窗）
+function 后台鉴权(request) {
+	if (!AdminPass) {
+		return new Response('后台未启用：请先在 Cloudflare 变量中添加 ADMINPASS，再访问本页面', {
+			status: 403,
+			headers: { 'Content-Type': 'text/plain; charset=UTF-8', 'Cache-Control': 'no-store' },
+		});
+	}
+	const auth = request.headers.get('Authorization') || '';
+	if (auth.startsWith('Basic ')) {
+		try {
+			const bytes = Uint8Array.from(atob(auth.slice(6).trim()), c => c.charCodeAt(0));
+			const decoded = new TextDecoder().decode(bytes); // 支持中文密码
+			const idx = decoded.indexOf(':');
+			if (idx > -1 && decoded.slice(0, idx) === AdminUser && decoded.slice(idx + 1) === AdminPass) return null;
+		} catch (e) { }
+	}
+	return new Response('需要登录后才能访问后台', {
+		status: 401,
+		headers: {
+			'WWW-Authenticate': `Basic realm="${FileName} Admin", charset="UTF-8"`,
+			'Content-Type': 'text/plain; charset=UTF-8',
+			'Cache-Control': 'no-store',
+		},
+	});
 }
 
 async function KV(request, env, txt = 'ADD.txt') {
