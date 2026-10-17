@@ -134,8 +134,20 @@ export default {
 			const utf8Decoder = new TextDecoder();
 			const text = utf8Decoder.decode(encodedData);
 
-			//去重
-			const uniqueLines = new Set(text.split('\n'));
+			//去重 + 剔除残缺节点（缺少端口的脏节点，会让路由器解析时报“缺少port参数”）
+			const 合法节点行 = text.split('\n').filter(line => {
+				const l = line.trim();
+				if (!l) return false;
+				if (/^vmess:\/\//i.test(l)) return true;                  // vmess 是 base64 JSON，交给客户端判断
+				if (/^ss:\/\//i.test(l) && !l.includes('@')) return true;  // 整段 base64 的 ss 无法用正则判断，放行
+				const m = l.match(/^[a-z0-9]+:\/\/(?:[^@\/]*@)?([^\/?#]+)/i);
+				if (!m) return false;
+				const hostport = m[1].trim();
+				if (!/:\d{1,5}$/.test(hostport)) return false;           // 没有 :端口 直接丢弃
+				const p = parseInt(hostport.split(':').pop(), 10);
+				return p > 0 && p <= 65535;
+			});
+			const uniqueLines = new Set(合法节点行);
 			const result = [...uniqueLines].join('\n');
 			//console.log(result);
 
