@@ -200,6 +200,20 @@ export default {
 				base64Data = encodeBase64(result);
 			}
 
+			// Clash 优先本地生成，不再等外部转换后端（此前超时 60s+，路由器报「配置文件缺少port:参数」）
+			if (订阅格式 == 'clash' && token != fakeToken) {
+				const 本地配置 = 生成本地Clash配置(req_data);
+				if (本地配置) {
+					return new Response(本地配置, {
+						headers: {
+							"Content-Disposition": `attachment; filename*=utf-8''${encodeURIComponent(FileName)}`,
+							"content-type": "text/yaml; charset=utf-8",
+							"Profile-Update-Interval": `${SUBUpdateTime}`,
+						}
+					});
+				}
+			}
+
 			if (订阅格式 == 'base64' || token == fakeToken) {
 				return new Response(base64Data, {
 					headers: {
@@ -221,7 +235,12 @@ export default {
 			}
 			//console.log(订阅转换URL);
 			try {
-				const subConverterResponse = await fetch(subConverterUrl);
+				const scCtrl = new AbortController();
+			const scTimer = setTimeout(() => { try { scCtrl.abort(); } catch (e) { } }, 10000);
+			let subConverterResponse;
+			try {
+				subConverterResponse = await fetch(subConverterUrl, { signal: scCtrl.signal });
+			} finally { clearTimeout(scTimer); }
 
 				if (!subConverterResponse.ok) {
 					return new Response(base64Data, {
@@ -621,6 +640,198 @@ async function 批量测速(text) {
 	return 结果;
 }
 
+// ===== 本地生成 Clash 配置（摆脱外部订阅转换后端的超时/挂掉）=====
+function yamlStr(v) {
+	return '"' + String(v == null ? '' : v).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+}
+
+function 取查询值(query, key) {
+	const m = String(query || '').match(new RegExp('[?&]' + key + '=([^&#]*)', 'i'));
+	if (!m) return '';
+	try { return decodeURIComponent(m[1]); } catch (e) { return m[1]; }
+}
+
+function 解析节点详情(line) {
+	const s = String(line || '').trim();
+	if (!s || /^https?:\/\//i.test(s)) return null;
+	const i = s.indexOf('://');
+	if (i < 0) return null;
+	const proto = s.slice(0, i).toLowerCase();
+	const hash = s.indexOf('#');
+	let name = '';
+	if (hash > -1) { try { name = decodeURIComponent(s.slice(hash + 1)); } catch (e) { name = s.slice(hash + 1); } }
+	const body = hash > -1 ? s.slice(0, hash) : s;
+	const rest = body.slice(i + 3);
+
+	if (proto === 'vmess') {
+		try {
+			const o = JSON.parse(安全Base64解码(rest.trim()));
+			const server = String(o.add || '').trim();
+			const port = parseInt(o.port, 10) || 0;
+			if (!server || !port) return null;
+			const tlsv = String(o.tls || '').toLowerCase();
+			return {
+				proto: 'vmess', name: o.ps || name || server, server, port,
+				uuid: String(o.id || ''), alterId: parseInt(o.aid, 10) || 0,
+				cipher: String(o.scy || 'auto'),
+				tls: tlsv === 'tls' || tlsv === '1' || tlsv === 'true',
+				sni: String(o.sni || o.host || ''), alpn: '',
+				network: String(o.net || 'tcp').toLowerCase(),
+				path: String(o.path || '/'), host: String(o.host || ''),
+				skipVerify: String(o.allowInsecure || '') === '1',
+			};
+		} catch (e) { return null; }
+	}
+
+	let userinfo = '', hostport = rest;
+	const q = rest.indexOf('?');
+	const query = q > -1 ? rest.slice(q) : '';
+	if (q > -1) hostport = rest.slice(0, q);
+
+	// ss:// 有时整段是 base64
+	if (proto === 'ss' && hostport.indexOf('@') < 0) {
+		try {
+			const dec = 安全Base64解码(hostport);
+			const m2 = dec.match(/^(.*?)@(.*?):(\d+)$/);
+			if (m2) { userinfo = m2[1]; hostport = m2[2] + ':' + m2[3]; }
+		} catch (e) { }
+	}
+
+	const at = hostport.lastIndexOf('@');
+	if (at > -1) { userinfo = hostport.slice(0, at); hostport = hostport.slice(at + 1); }
+	const c = hostport.lastIndexOf(':');
+	let server = c > -1 ? hostport.slice(0, c) : hostport;
+	const port = c > -1 ? (parseInt(hostport.slice(c + 1), 10) || 0) : 0;
+	server = String(server || '').replace(/^\[|\]$/g, '').trim();
+	if (!server || !port) return null;
+
+	const d = {
+		proto, name: name || (server + ':' + port), server, port,
+		network: (取查询值(query, 'type') || 取查询值(query, 'net') || 'tcp').toLowerCase(),
+		path: 取查询值(query, 'path') || '/',
+		host: 取查询值(query, 'host'),
+		sni: 取查询值(query, 'sni') || 取查询值(query, 'peer') || 取查询值(query, 'servername'),
+		fp: 取查询值(query, 'fp'),
+		alpn: 取查询值(query, 'alpn'),
+		serviceName: 取查询值(query, 'serviceName') || 取查询值(query, 'grpc-service-name'),
+		flow: 取查询值(query, 'flow'),
+	};
+	const sec = (取查询值(query, 'security') || '').toLowerCase();
+	if (sec === 'tls' || sec === 'reality' || sec === 'xtls') d.tls = true;
+	else if (sec === 'none') d.tls = false;
+	else d.tls = [443, 8443, 2053, 2083, 2087, 2096].indexOf(port) > -1;
+	d.skipVerify = ['1', 'true', 'yes'].indexOf((取查询值(query, 'allowInsecure') || 取查询值(query, 'insecure') || '').toLowerCase()) > -1;
+	if (d.network === 'grpc' && d.serviceName) d.path = d.serviceName;
+
+	if (proto === 'vless') d.uuid = userinfo.split('?')[0];
+	else if (proto === 'trojan' || proto === 'hysteria2' || proto === 'hy2' || proto === 'tuic') d.password = userinfo;
+	else if (proto === 'ss') {
+		let ui = userinfo;
+		if (ui && ui.indexOf(':') < 0) { const dec = 安全Base64解码(ui); if (dec) ui = dec; }
+		const cc = ui.indexOf(':');
+		if (cc > -1) { d.cipher = ui.slice(0, cc); d.password = ui.slice(cc + 1); }
+		d.tls = false;
+	}
+	return d;
+}
+
+function 转Clash代理(d, name) {
+	const o = [];
+	const push = (k, v) => o.push(k + ': ' + v);
+	push('name', yamlStr(name));
+	push('server', yamlStr(d.server));
+	push('port', d.port);
+	push('type', yamlStr(d.proto));
+	if (d.proto === 'vless') { push('uuid', yamlStr(d.uuid)); push('udp', 'true'); }
+	else if (d.proto === 'vmess') { push('uuid', yamlStr(d.uuid)); push('alterId', d.alterId); push('cipher', yamlStr(d.cipher)); push('udp', 'true'); }
+	else if (d.proto === 'ss') { push('cipher', yamlStr(d.cipher)); push('password', yamlStr(d.password)); push('udp', 'true'); }
+	else { push('password', yamlStr(d.password)); }
+	if (d.tls) {
+		push('tls', 'true');
+		if (d.sni) push(d.proto === 'trojan' ? 'sni' : 'servername', yamlStr(d.sni));
+	}
+	if (d.skipVerify) push('skip-cert-verify', 'true');
+	if (d.fp) push('client-fingerprint', yamlStr(d.fp));
+	if (d.alpn) push('alpn', '[' + d.alpn.split(',').map(x => yamlStr(x.trim())).join(', ') + ']');
+	if (d.flow) push('flow', yamlStr(d.flow));
+	const net = d.network || 'tcp';
+	if (net !== 'tcp') push('network', yamlStr(net));
+	if (net === 'ws') push('ws-opts', '{path: ' + yamlStr(d.path || '/') + ', headers: {Host: ' + yamlStr(d.host || d.sni || d.server) + '}}');
+	if (net === 'grpc') push('grpc-opts', '{grpc-service-name: ' + yamlStr(d.serviceName || '') + '}');
+	if (net === 'h2' || net === 'http') push('h2-opts', '{host: [' + yamlStr(d.host || d.server) + '], path: ' + yamlStr(d.path || '/') + '}');
+	return '  - {' + o.join(', ') + '}';
+}
+
+// 输入节点文本，输出完整 Clash YAML；解析不出任何节点时返回空串（由调用方回退）
+function 生成本地Clash配置(text) {
+	const lines = String(text || '').split('\n');
+	const 节点行 = [];
+	const 名字 = [];
+	const 计数 = {};
+	for (const raw of lines) {
+		const d = 解析节点详情(raw);
+		if (!d) continue;
+		let n = (d.name && String(d.name).trim()) ? String(d.name).trim() : (d.server + ':' + d.port);
+		if (计数[n] === undefined) { 计数[n] = 1; } else { 计数[n] = 计数[n] + 1; n = n + '-' + 计数[n]; }
+		const row = 转Clash代理(d, n);
+		if (row) { 节点行.push(row); 名字.push(n); }
+	}
+	if (!节点行.length) return '';
+	const 全部 = 名字.map(yamlStr).join(', ');
+	const G1 = yamlStr('节点选择'), G2 = yamlStr('自动选择'), G3 = yamlStr('国外流量'), G4 = yamlStr('全球直连'), G5 = yamlStr('广告拦截');
+	const L = [];
+	L.push('mixed-port: 7890');
+	L.push('port: 7892');
+	L.push('socks-port: 7891');
+	L.push('allow-lan: true');
+	L.push('bind-address: "*"');
+	L.push('mode: Rule');
+	L.push('log-level: info');
+	L.push('external-controller: 127.0.0.1:9090');
+	L.push('ipv6: false');
+	L.push('dns:');
+	L.push('  enable: true');
+	L.push('  listen: 0.0.0.0:1053');
+	L.push('  ipv6: false');
+	L.push('  enhanced-mode: fake-ip');
+	L.push('  fake-ip-range: 198.18.0.1/16');
+	L.push("  fake-ip-filter: ['*.lan', '*.local', 'localhost.ptlogin2.qq.com']");
+	L.push('  nameserver: [223.5.5.5, 119.29.29.29]');
+	L.push('  fallback: [8.8.8.8, 1.1.1.1]');
+	L.push('proxies:');
+	for (const r of 节点行) L.push(r);
+	L.push('proxy-groups:');
+	L.push('  - name: ' + G1);
+	L.push('    type: select');
+	L.push('    proxies: [' + 全部 + ', DIRECT]');
+	L.push('  - name: ' + G2);
+	L.push('    type: url-test');
+	L.push('    url: http://www.gstatic.com/generate_204');
+	L.push('    interval: 300');
+	L.push('    tolerance: 50');
+	L.push('    proxies: [' + 全部 + ']');
+	L.push('  - name: ' + G3);
+	L.push('    type: select');
+	L.push('    proxies: [' + G1 + ', ' + G2 + ', DIRECT]');
+	L.push('  - name: ' + G4);
+	L.push('    type: select');
+	L.push('    proxies: [DIRECT, ' + G1 + ', ' + G2 + ']');
+	L.push('  - name: ' + G5);
+	L.push('    type: select');
+	L.push('    proxies: [REJECT, DIRECT, ' + G1 + ']');
+	L.push('rules:');
+	L.push('  - DOMAIN-SUFFIX,local,DIRECT');
+	L.push('  - DOMAIN-KEYWORD,localhost,DIRECT');
+	L.push('  - IP-CIDR,127.0.0.0/8,DIRECT,no-resolve');
+	L.push('  - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve');
+	L.push('  - IP-CIDR,172.16.0.0/12,DIRECT,no-resolve');
+	L.push('  - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve');
+	L.push('  - IP-CIDR,100.64.0.0/10,DIRECT,no-resolve');
+	L.push('  - GEOIP,CN,DIRECT');
+	L.push('  - MATCH,' + G3);
+	return L.join('\n') + '\n';
+}
+
 // 后台管理页面鉴权：通过返回 null，未通过返回 401 响应（触发浏览器弹窗）
 function 后台鉴权(request) {
 	if (!AdminPass) {
@@ -644,7 +855,7 @@ function 后台鉴权(request) {
 			'WWW-Authenticate': `Basic realm="${FileName} Admin", charset="UTF-8"`,
 			'Content-Type': 'text/plain; charset=UTF-8',
 			'Cache-Control': 'no-store',
-			'X-Admin-Build': '2026-10-17d',
+			'X-Admin-Build': '2026-10-25a',
 		},
 	});
 }
@@ -833,7 +1044,7 @@ async function KV(request, env, txt = 'ADD.txt') {
 					<br>
 					################################################################<br>
 					${decodeURIComponent(atob('dGVsZWdyYW0lMjAlRTQlQkElQTQlRTYlQjUlODElRTclQkUlQTQlMjAlRTYlOEElODAlRTYlOUMlQUYlRTUlQTQlQTclRTQlQkQlQUMlN0UlRTUlOUMlQTglRTclQkElQkYlRTUlOEYlOTElRTclODklOEMhJTNDYnIlM0UKJTNDYSUyMGhyZWYlM0QlMjdodHRwcyUzQSUyRiUyRnQubWUlMkZDTUxpdXNzc3MlMjclM0VodHRwcyUzQSUyRiUyRnQubWUlMkZDTUxpdXNzc3MlM0MlMkZhJTNFJTNDYnIlM0UKLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tJTNDYnIlM0UKZ2l0aHViJTIwJUU5JUExJUI5JUU3JTlCJUFFJUU1JTlDJUIwJUU1JTlEJTgwJTIwU3RhciFTdGFyIVN0YXIhISElM0NiciUzRQolM0NhJTIwaHJlZiUzRCUyN2h0dHBzJTNBJTJGJTJGZ2l0aHViLmNvbSUyRmNtbGl1JTJGQ0YtV29ya2Vycy1TVUIlMjclM0VodHRwcyUzQSUyRiUyRmdpdGh1Yi5jb20lMkZjbWxpdSUyRkNGLVdvcmtlcnMtU1VCJTNDJTJGYSUzRSUzQ2JyJTNFCi0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLSUzQ2JyJTNFCiUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMw=='))}
-					<br><br>UA: <strong>${request.headers.get('User-Agent')}</strong> · 构建 <strong>2026-10-17d</strong>
+					<br><br>UA: <strong>${request.headers.get('User-Agent')}</strong> · 构建 <strong>2026-10-25a</strong>
 					<script>
 					function copyToClipboard(text, qrcode) {
 						navigator.clipboard.writeText(text).then(() => {
@@ -1250,7 +1461,7 @@ async function KV(request, env, txt = 'ADD.txt') {
 				"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
 				"Pragma": "no-cache",
 				"Expires": "0",
-				"X-Admin-Build": "2026-10-17d"
+				"X-Admin-Build": "2026-10-25a"
 			}
 		});
 	} catch (error) {
