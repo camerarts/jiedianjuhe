@@ -782,7 +782,7 @@ function 生成本地Clash配置(text) {
 	}
 	if (!节点行.length) return '';
 	const 全部 = 名字.map(yamlStr).join(', ');
-	const G1 = yamlStr('节点选择'), G2 = yamlStr('自动选择'), G3 = yamlStr('国外流量'), G4 = yamlStr('全球直连'), G5 = yamlStr('广告拦截');
+	const G1 = yamlStr('节点选择'), G2 = yamlStr('自动选择'), G3 = '国外流量', G4 = yamlStr('全球直连'), G5 = yamlStr('广告拦截');
 	const L = [];
 	L.push('mixed-port: 7890');
 	L.push('port: 7892');
@@ -859,7 +859,7 @@ function 后台鉴权(request) {
 			'WWW-Authenticate': `Basic realm="${FileName} Admin", charset="UTF-8"`,
 			'Content-Type': 'text/plain; charset=UTF-8',
 			'Cache-Control': 'no-store',
-			'X-Admin-Build': '2026-10-25b',
+			'X-Admin-Build': '2026-10-25c',
 		},
 	});
 }
@@ -1048,7 +1048,7 @@ async function KV(request, env, txt = 'ADD.txt') {
 					<br>
 					################################################################<br>
 					${decodeURIComponent(atob('dGVsZWdyYW0lMjAlRTQlQkElQTQlRTYlQjUlODElRTclQkUlQTQlMjAlRTYlOEElODAlRTYlOUMlQUYlRTUlQTQlQTclRTQlQkQlQUMlN0UlRTUlOUMlQTglRTclQkElQkYlRTUlOEYlOTElRTclODklOEMhJTNDYnIlM0UKJTNDYSUyMGhyZWYlM0QlMjdodHRwcyUzQSUyRiUyRnQubWUlMkZDTUxpdXNzc3MlMjclM0VodHRwcyUzQSUyRiUyRnQubWUlMkZDTUxpdXNzc3MlM0MlMkZhJTNFJTNDYnIlM0UKLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tJTNDYnIlM0UKZ2l0aHViJTIwJUU5JUExJUI5JUU3JTlCJUFFJUU1JTlDJUIwJUU1JTlEJTgwJTIwU3RhciFTdGFyIVN0YXIhISElM0NiciUzRQolM0NhJTIwaHJlZiUzRCUyN2h0dHBzJTNBJTJGJTJGZ2l0aHViLmNvbSUyRmNtbGl1JTJGQ0YtV29ya2Vycy1TVUIlMjclM0VodHRwcyUzQSUyRiUyRmdpdGh1Yi5jb20lMkZjbWxpdSUyRkNGLVdvcmtlcnMtU1VCJTNDJTJGYSUzRSUzQ2JyJTNFCi0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLSUzQ2JyJTNFCiUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMw=='))}
-					<br><br>UA: <strong>${request.headers.get('User-Agent')}</strong> · 构建 <strong>2026-10-25b</strong>
+					<br><br>UA: <strong>${request.headers.get('User-Agent')}</strong> · 构建 <strong>2026-10-25c</strong>
 					<script>
 					function copyToClipboard(text, qrcode) {
 						navigator.clipboard.writeText(text).then(() => {
@@ -1465,7 +1465,7 @@ async function KV(request, env, txt = 'ADD.txt') {
 				"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
 				"Pragma": "no-cache",
 				"Expires": "0",
-				"X-Admin-Build": "2026-10-25b"
+				"X-Admin-Build": "2026-10-25c"
 			}
 		});
 	} catch (error) {
