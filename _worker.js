@@ -200,8 +200,12 @@ export default {
 				base64Data = encodeBase64(result);
 			}
 
-			// Clash 优先本地生成，不再等外部转换后端（此前超时 60s+，路由器报「配置文件缺少port:参数」）
-			if (订阅格式 == 'clash' && token != fakeToken) {
+			// 非浏览器请求（路由器、Clash客户端等）优先返回 Clash YAML，
+			// 本地生成不再等外部转换后端（此前超时 60s+，路由器报「配置文件缺少port:参数」）。
+			// 浏览器UA且未明确要求clash时，保持原样返回base64，方便直接查看/复制。
+			const 是浏览器 = userAgent.includes('mozilla');
+			const 明确要求Clash = 订阅格式 == 'clash';
+			if ((明确要求Clash || !是浏览器) && token != fakeToken) {
 				const 本地配置 = 生成本地Clash配置(req_data);
 				if (本地配置) {
 					return new Response(本地配置, {
@@ -214,7 +218,7 @@ export default {
 				}
 			}
 
-			if (订阅格式 == 'base64' || token == fakeToken) {
+			if (订阅格式 == 'base64' || token == fakeToken || 是浏览器) {
 				return new Response(base64Data, {
 					headers: {
 						"content-type": "text/plain; charset=utf-8",
